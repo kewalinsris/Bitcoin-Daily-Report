@@ -23,22 +23,22 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      # ค้นหาและรันอัตโนมัติ ไม่ว่าไฟล์จะซ่อนอยู่โฟลเดอร์ไหน
-      - name: Run Python
+      # ขั้นตอนนี้จะค้นหาและรันไฟล์ main.py ให้เอง ไม่ว่ามันจะอยู่โฟลเดอร์ไหนก็ตาม
+      - name: Dynamic Run Python
         env:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
         run: |
           echo "=== Searching for main.py ==="
-          # ค้นหาตำแหน่งของไฟล์ main.py
           FILE_PATH=$(find . -name "main.py" -print -quit)
           
           if [ -z "$FILE_PATH" ]; then
             echo "ERROR: Could not find main.py anywhere in the repository!"
+            echo "=== Listing all files to see what happened ==="
+            ls -R
             exit 1
           fi
           
           echo "Found main.py at: $FILE_PATH"
           echo "=== Starting script ==="
-          # รันไฟล์จากตำแหน่งที่เจอจริง
           python "$FILE_PATH"
