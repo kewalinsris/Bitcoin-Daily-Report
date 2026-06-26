@@ -2,44 +2,43 @@ name: Bitcoin Daily Report
 
 on:
   schedule:
-    # ตั้งเวลาให้รันทุกวัน (ปรับเปลี่ยนเวลาได้ตามต้องการ ในตัวอย่างนี้คือทุกวันเวลา 00:00 UTC)
     - cron: '0 0 * * *'
-  workflow_dispatch: # ทำให้สามารถกดรันเองแบบ Manual ได้ด้วย
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. ดึงโค้ดจาก Repository ลงมาเครื่องจำลอง
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. ติดตั้ง Python เวอร์ชัน 3.11
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      # 3. ติดตั้ง Dependencies (Library) ที่จำเป็น
-      - name: Install dependencies
+      - name: Install Packages
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          # หากคุณไม่ได้ใช้ requirements.txt แต่ใช้ library อื่นๆ สามารถเพิ่มพิมพ์บรรทัดล่างนี้ได้ เช่น:
-          # pip install requests
 
-      # 4. ตรวจสอบรายชื่อไฟล์ในเครื่องจำลอง (ช่วยหาจุดผิดพลาดหากไฟล์อยู่ผิดที่)
-      - name: Check directory files
-        run: |
-          echo "--- Current Location ---"
-          pwd
-          echo "--- Files List ---"
-          ls -R
-
-      # 5. รันสคริปต์ Python
-      - name: Run python main.py
+      # ค้นหาและรันอัตโนมัติ ไม่ว่าไฟล์จะซ่อนอยู่โฟลเดอร์ไหน
+      - name: Run Python
         env:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
-        run: python main.py
+        run: |
+          echo "=== Searching for main.py ==="
+          # ค้นหาตำแหน่งของไฟล์ main.py
+          FILE_PATH=$(find . -name "main.py" -print -quit)
+          
+          if [ -z "$FILE_PATH" ]; then
+            echo "ERROR: Could not find main.py anywhere in the repository!"
+            exit 1
+          fi
+          
+          echo "Found main.py at: $FILE_PATH"
+          echo "=== Starting script ==="
+          # รันไฟล์จากตำแหน่งที่เจอจริง
+          python "$FILE_PATH"
