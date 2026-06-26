@@ -1,44 +1,16 @@
-name: Bitcoin Daily Report
+name: Daily Bitcoin Report
 
 on:
-  schedule:
-    - cron: '0 0 * * *'
   workflow_dispatch:
 
 jobs:
-  build:
+  send-report:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install Packages
-        run: |
-          python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-
-      # ขั้นตอนนี้จะค้นหาและรันไฟล์ main.py ให้เอง ไม่ว่ามันจะอยู่โฟลเดอร์ไหนก็ตาม
-      - name: Dynamic Run Python
+      - name: Send LINE Test
         env:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
         run: |
-          echo "=== Searching for main.py ==="
-          FILE_PATH=$(find . -name "main.py" -print -quit)
-          
-          if [ -z "$FILE_PATH" ]; then
-            echo "ERROR: Could not find main.py anywhere in the repository!"
-            echo "=== Listing all files to see what happened ==="
-            ls -R
-            exit 1
-          fi
-          
-          echo "Found main.py at: $FILE_PATH"
-          echo "=== Starting script ==="
-          python "$FILE_PATH"
+          echo "✅ Workflow updated"
