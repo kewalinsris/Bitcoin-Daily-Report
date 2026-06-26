@@ -11,6 +11,11 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      - name: Show Files
+        run: |
+          pwd
+          ls -la
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -20,11 +25,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
-      - name: Show Files
-        run: |
-          pwd
-          ls -la
 
       - name: Run Python
         env:
