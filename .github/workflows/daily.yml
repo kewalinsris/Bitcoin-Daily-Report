@@ -2,7 +2,6 @@ steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # เพิ่มขั้นตอนนี้เข้าไปเพื่อดูว่าไฟล์จริง ๆ อยู่ที่ไหน
       - name: Check Directory Structure
         run: |
           echo "=== Current Working Directory ==="
