@@ -8,14 +8,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Show Files
-        run: |
-          pwd
-          ls -la
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -24,7 +16,32 @@ jobs:
       - name: Install Packages
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install requests yfinance pandas numpy
+
+      - name: Create main.py
+        run: |
+          cat > main.py <<'PY'
+          import os
+          import requests
+
+          LINE_CHANNEL_ACCESS_TOKEN = os.environ["LINE_CHANNEL_ACCESS_TOKEN"]
+          LINE_USER_ID = os.environ["LINE_USER_ID"]
+
+          url = "https://api.line.me/v2/bot/message/push"
+          headers = {
+              "Content-Type": "application/json",
+              "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"
+          }
+          payload = {
+              "to": LINE_USER_ID,
+              "messages": [{"type": "text", "text": "✅ Bitcoin Daily Report test สำเร็จ"}]
+          }
+
+          r = requests.post(url, headers=headers, json=payload)
+          print(r.status_code)
+          print(r.text)
+          r.raise_for_status()
+          PY
 
       - name: Run Python
         env:
