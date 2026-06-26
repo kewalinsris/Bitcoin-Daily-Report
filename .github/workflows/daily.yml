@@ -3,14 +3,31 @@ name: Daily Bitcoin Report
 on:
   workflow_dispatch:
 
+  schedule:
+    # 09:00 น. ประเทศไทย (UTC+7)
+    - cron: "0 2 * * *"
+
 jobs:
-  send-report:
+  bitcoin-report:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Send LINE Test
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Bitcoin Report
         env:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
         run: |
-          echo "✅ Workflow updated"
+          python main.py
