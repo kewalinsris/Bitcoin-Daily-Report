@@ -1,18 +1,15 @@
 import os
+import time
 import requests
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 LINE_CHANNEL_ACCESS_TOKEN = os.environ["LINE_CHANNEL_ACCESS_TOKEN"]
 LINE_USER_ID = os.environ["LINE_USER_ID"]
 
-# Optional hidden MVRV input.
-# Add these GitHub Secrets later if you have a usable MVRV API endpoint:
-# BGEOMETRICS_API_URL
-# BGEOMETRICS_API_KEY
-BGEOMETRICS_API_URL = os.environ.get("BGEOMETRICS_API_URL", "").strip()
-BGEOMETRICS_API_KEY = os.environ.get("BGEOMETRICS_API_KEY", "").strip()
+MVRV_API_URL = os.environ.get("MVRV_API_URL", "").strip()
+MVRV_API_KEY = os.environ.get("MVRV_API_KEY", "").strip()
 
 
 def send_line_message(text):
@@ -28,74 +25,69 @@ def send_line_message(text):
     response.raise_for_status()
 
 
-def fetch_coingecko_ohlc(days="max"):
-    url = "https://api.coingecko.com/api/v3/coins/bitcoin/ohlc"
-    params = {"vs_currency": "usd", "days": days}
+def fetch_coinbase_btc_ohlcv(days=2500):
+    product_id = "BTC-USD"
+    granularity = 86400
+    chunk_days = 290
 
-    try:
-        response = requests.get(url, params=params, timeout=30)
-        response.raise_for_status()
-        data = response.json()
+    end_dt = datetime.now(timezone.utc)
+    start_dt = end_dt - timedelta(days=days)
 
-        if not data:
-            raise ValueError("CoinGecko OHLC returned empty data")
+    rows = []
+    cursor = start_dt
 
-        df = pd.DataFrame(data, columns=["timestamp", "open", "high", "low", "close"])
-        df["date"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.date
+    while cursor < end_dt:
+        chunk_end = min(cursor + timedelta(days=chunk_days), end_dt)
+        url = f"https://api.exchange.coinbase.com/products/{product_id}/candles"
+        params = {
+            "granularity": granularity,
+            "start": cursor.isoformat(),
+            "end": chunk_end.isoformat(),
+        }
 
-        for col in ["open", "high", "low", "close"]:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-        df = (
-            df.dropna(subset=["open", "high", "low", "close"])
-            .groupby("date", as_index=False)
-            .agg({"open": "first", "high": "max", "low": "min", "close": "last"})
-            .sort_values("date")
-            .reset_index(drop=True)
+        response = requests.get(
+            url,
+            params=params,
+            headers={"User-Agent": "Bitcoin-Daily-Report-v2"},
+            timeout=30,
         )
-        df["data_quality"] = "CoinGecko OHLC"
+        response.raise_for_status()
 
-        if len(df) < 500:
-            raise ValueError(f"Not enough OHLC history: {len(df)} rows")
+        data = response.json()
+        if isinstance(data, list):
+            rows.extend(data)
 
-        return df
+        cursor = chunk_end
+        time.sleep(0.15)
 
-    except Exception as e:
-        print("OHLC fetch failed. Fallback to market_chart:", str(e))
-        return fetch_coingecko_market_chart_fallback(days="max")
+    if not rows:
+        raise ValueError("Coinbase returned no candle data")
 
+    df = pd.DataFrame(rows, columns=["time", "low", "high", "open", "close", "volume"])
+    df["date"] = pd.to_datetime(df["time"], unit="s", utc=True).dt.date
 
-def fetch_coingecko_market_chart_fallback(days="max"):
-    url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart"
-    params = {"vs_currency": "usd", "days": days}
-
-    response = requests.get(url, params=params, timeout=30)
-    response.raise_for_status()
-    data = response.json()
-
-    if "prices" not in data or not data["prices"]:
-        raise ValueError("CoinGecko market_chart returned no price data")
-
-    df = pd.DataFrame(data["prices"], columns=["timestamp", "close"])
-    df["date"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.date
-    df["close"] = pd.to_numeric(df["close"], errors="coerce")
+    for col in ["open", "high", "low", "close", "volume"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
 
     df = (
-        df.dropna(subset=["close"])
+        df.dropna(subset=["open", "high", "low", "close"])
         .groupby("date", as_index=False)
-        .agg({"close": "last"})
+        .agg({
+            "open": "first",
+            "high": "max",
+            "low": "min",
+            "close": "last",
+            "volume": "sum",
+        })
         .sort_values("date")
         .reset_index(drop=True)
     )
 
-    df["open"] = df["close"].shift(1)
-    df["high"] = df[["open", "close"]].max(axis=1)
-    df["low"] = df[["open", "close"]].min(axis=1)
-    df = df.dropna(subset=["open", "high", "low", "close"]).reset_index(drop=True)
-    df["data_quality"] = "CoinGecko market_chart fallback"
+    today_utc = datetime.now(timezone.utc).date()
+    df = df[df["date"] < today_utc].reset_index(drop=True)
 
     if len(df) < 500:
-        raise ValueError(f"Not enough fallback history: {len(df)} rows")
+        raise ValueError(f"Not enough Coinbase daily candles: {len(df)} rows")
 
     return df
 
@@ -103,7 +95,6 @@ def fetch_coingecko_market_chart_fallback(days="max"):
 def fetch_fear_greed():
     url = "https://api.alternative.me/fng/"
     params = {"limit": 1, "format": "json"}
-
     response = requests.get(url, params=params, timeout=30)
     response.raise_for_status()
     data = response.json()
@@ -128,7 +119,6 @@ def parse_numeric_from_json(obj):
                     return float(obj[key])
                 except Exception:
                     pass
-
         for value in obj.values():
             parsed = parse_numeric_from_json(value)
             if parsed is not None:
@@ -143,22 +133,17 @@ def parse_numeric_from_json(obj):
     return None
 
 
-def fetch_mvrv_z_score_optional():
-    if not BGEOMETRICS_API_URL:
+def fetch_mvrv_optional():
+    if not MVRV_API_URL:
         return None
 
-    headers = {
-        "Accept": "application/json",
-        "User-Agent": "Bitcoin-Daily-Report/2.0",
-    }
-
-    if BGEOMETRICS_API_KEY:
-        headers["Authorization"] = f"Bearer {BGEOMETRICS_API_KEY}"
-        headers["X-API-Key"] = BGEOMETRICS_API_KEY
+    headers = {"Accept": "application/json", "User-Agent": "Bitcoin-Daily-Report-v2"}
+    if MVRV_API_KEY:
+        headers["Authorization"] = f"Bearer {MVRV_API_KEY}"
+        headers["X-API-Key"] = MVRV_API_KEY
 
     try:
-        response = requests.get(BGEOMETRICS_API_URL, headers=headers, timeout=30)
-
+        response = requests.get(MVRV_API_URL, headers=headers, timeout=30)
         if response.status_code >= 400:
             print("MVRV API status:", response.status_code)
             print(response.text[:500])
@@ -168,7 +153,6 @@ def fetch_mvrv_z_score_optional():
         if value is None:
             print("MVRV API parsed no numeric value")
             return None
-
         return float(value)
 
     except Exception as e:
@@ -180,10 +164,8 @@ def wilder_rsi(close, period=14):
     delta = close.diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
-
     avg_gain = gain.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
     avg_loss = loss.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
-
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
@@ -248,20 +230,20 @@ def trend_status(price, ma, label):
     return f"🔴 Below {label}"
 
 
-def mvrv_zone(mvrv_z):
-    if mvrv_z is None:
+def mvrv_zone(mvrv):
+    if mvrv is None:
         return "unknown"
-    if mvrv_z < 0.5:
+    if mvrv < 0.5:
         return "undervalued"
-    if mvrv_z < 3:
+    if mvrv < 3:
         return "normal"
-    if mvrv_z < 6:
+    if mvrv < 6:
         return "expensive"
     return "overheated"
 
 
-def get_market_phase(price, ma50, ma200, fear, drawdown, pi_cycle_warning, mvrv_z):
-    zone = mvrv_zone(mvrv_z)
+def get_market_phase(price, ma50, ma200, fear, drawdown, pi_cycle_warning, mvrv):
+    zone = mvrv_zone(mvrv)
 
     if pi_cycle_warning or zone == "overheated" or (fear >= 80 and zone == "expensive"):
         return "🟡 Distribution"
@@ -278,8 +260,8 @@ def get_market_phase(price, ma50, ma200, fear, drawdown, pi_cycle_warning, mvrv_
     return "🟡 Transition"
 
 
-def get_dca_status(price, ma200, pi_cycle_warning, mvrv_z):
-    zone = mvrv_zone(mvrv_z)
+def get_dca_status(price, ma200, pi_cycle_warning, mvrv):
+    zone = mvrv_zone(mvrv)
 
     if pi_cycle_warning or zone == "overheated":
         return "🟡 Continue with Caution"
@@ -293,13 +275,12 @@ def get_dca_status(price, ma200, pi_cycle_warning, mvrv_z):
     return "🟡 Continue with Caution"
 
 
-def get_buy_the_dip(price, ma200, rsi, fear, drawdown, atr_percentile, mvrv_z):
+def get_buy_the_dip(price, ma200, rsi, fear, drawdown, atr_percentile, mvrv):
     total_weight = 0
     score = 0
     reasons = []
-    zone = mvrv_zone(mvrv_z)
+    zone = mvrv_zone(mvrv)
 
-    # MVRV = 30. If unavailable, normalize score to remaining indicators.
     if zone != "unknown":
         total_weight += 30
         if zone == "undervalued":
@@ -309,7 +290,6 @@ def get_buy_the_dip(price, ma200, rsi, fear, drawdown, atr_percentile, mvrv_z):
             score += 15
             reasons.append("✓ On-chain valuation ยังไม่แพงเกินไป")
 
-    # ATH Drawdown = 25
     total_weight += 25
     if drawdown <= -35:
         score += 25
@@ -321,7 +301,6 @@ def get_buy_the_dip(price, ma200, rsi, fear, drawdown, atr_percentile, mvrv_z):
         score += 12
         reasons.append("✓ ราคาย่อลงมากกว่า 15% จาก ATH")
 
-    # RSI = 15
     total_weight += 15
     if rsi < 30:
         score += 15
@@ -330,7 +309,6 @@ def get_buy_the_dip(price, ma200, rsi, fear, drawdown, atr_percentile, mvrv_z):
         score += 8
         reasons.append("✓ RSI เริ่มอ่อนตัว")
 
-    # Fear & Greed = 15
     total_weight += 15
     if fear <= 25:
         score += 15
@@ -339,7 +317,6 @@ def get_buy_the_dip(price, ma200, rsi, fear, drawdown, atr_percentile, mvrv_z):
         score += 8
         reasons.append("✓ ตลาดอยู่ในโซน Fear")
 
-    # ATR = 10
     total_weight += 10
     if atr_percentile < 80:
         score += 10
@@ -348,7 +325,6 @@ def get_buy_the_dip(price, ma200, rsi, fear, drawdown, atr_percentile, mvrv_z):
         score += 5
         reasons.append("✓ ความผันผวนสูง แต่ยังไม่สุดโต่ง")
 
-    # Trend = 5
     total_weight += 5
     if price > ma200:
         score += 5
@@ -371,8 +347,8 @@ def get_buy_the_dip(price, ma200, rsi, fear, drawdown, atr_percentile, mvrv_z):
     return f"❌ Not Yet ({normalized}%)"
 
 
-def get_profit_strategy(rsi, fear, drawdown, pi_cycle_warning, mvrv_z):
-    zone = mvrv_zone(mvrv_z)
+def get_profit_strategy(rsi, fear, drawdown, pi_cycle_warning, mvrv):
+    zone = mvrv_zone(mvrv)
     signals = []
     hard_confirmation = False
 
@@ -418,19 +394,13 @@ def get_profit_strategy(rsi, fear, drawdown, pi_cycle_warning, mvrv_z):
 
 
 def build_report():
-    df = fetch_coingecko_ohlc(days="max")
+    df = fetch_coinbase_btc_ohlcv(days=2500)
     df = calculate_indicators(df)
 
     clean = df.dropna(
         subset=[
-            "close",
-            "rsi14",
-            "sma50",
-            "sma111",
-            "sma200",
-            "sma350x2",
-            "ath_drawdown_pct",
-            "atr_percentile_252",
+            "close", "rsi14", "sma50", "sma111", "sma200",
+            "sma350x2", "ath_drawdown_pct", "atr_percentile_252",
         ]
     ).copy()
 
@@ -449,56 +419,25 @@ def build_report():
     ma200 = float(latest["sma200"])
     ma111 = float(latest["sma111"])
     ma350x2 = float(latest["sma350x2"])
-
     drawdown = float(latest["ath_drawdown_pct"])
     atr_percentile = float(latest["atr_percentile_252"])
 
     pi_cycle_warning = ma111 >= ma350x2
 
     fear, _fear_label = fetch_fear_greed()
-    mvrv_z = fetch_mvrv_z_score_optional()
+    mvrv = fetch_mvrv_optional()
 
-    phase = get_market_phase(
-        price=price,
-        ma50=ma50,
-        ma200=ma200,
-        fear=fear,
-        drawdown=drawdown,
-        pi_cycle_warning=pi_cycle_warning,
-        mvrv_z=mvrv_z,
-    )
-
-    dca = get_dca_status(
-        price=price,
-        ma200=ma200,
-        pi_cycle_warning=pi_cycle_warning,
-        mvrv_z=mvrv_z,
-    )
-
-    buy_dip = get_buy_the_dip(
-        price=price,
-        ma200=ma200,
-        rsi=rsi,
-        fear=fear,
-        drawdown=drawdown,
-        atr_percentile=atr_percentile,
-        mvrv_z=mvrv_z,
-    )
-
-    profit = get_profit_strategy(
-        rsi=rsi,
-        fear=fear,
-        drawdown=drawdown,
-        pi_cycle_warning=pi_cycle_warning,
-        mvrv_z=mvrv_z,
-    )
+    phase = get_market_phase(price, ma50, ma200, fear, drawdown, pi_cycle_warning, mvrv)
+    dca = get_dca_status(price, ma200, pi_cycle_warning, mvrv)
+    buy_dip = get_buy_the_dip(price, ma200, rsi, fear, drawdown, atr_percentile, mvrv)
+    profit = get_profit_strategy(rsi, fear, drawdown, pi_cycle_warning, mvrv)
 
     trend_50 = trend_status(price, ma50, "50 DMA")
     trend_200 = trend_status(price, ma200, "200 DMA")
 
     date_th = datetime.now(ZoneInfo("Asia/Bangkok")).strftime("%d/%m/%Y")
 
-    message = f'''₿ Bitcoin Daily Report
+    message = f"""₿ Bitcoin Daily Report
 ประจำวันที่ {date_th}
 
 ━━━━━━━━━━━━━━
@@ -532,10 +471,12 @@ Buy the Dip
 
 Profit Strategy
 {profit}
-'''
+"""
 
-    print("Data source:", latest.get("data_quality", "unknown"))
-    print("MVRV available:", mvrv_z is not None)
+    print("Data Source: Coinbase Exchange BTC-USD daily candles")
+    print("Rows:", len(df))
+    print("Latest complete candle date:", latest["date"])
+    print("MVRV available:", mvrv is not None)
 
     return message
 
