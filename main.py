@@ -25,12 +25,27 @@ def send_line_message(text):
     response.raise_for_status()
 
 
-def get_binance_btc_ohlcv():
-    url = "https://api.binance.com/api/v3/klines"
+def get_btc_price():
+    url = "https://api.coingecko.com/api/v3/coins/bitcoin"
+
     params = {
-        "symbol": "BTCUSDT",
-        "interval": "1d",
-        "limit": 500,
+        "localization": "false",
+        "tickers": "false",
+        "market_data": "true",
+        "community_data": "false",
+        "developer_data": "false",
+        "sparkline": "false"
+    }
+
+    response = requests.get(url, params=params, timeout=30)
+    response.raise_for_status()
+
+    data = response.json()
+
+    return (
+        float(data["market_data"]["current_price"]["usd"]),
+        float(data["market_data"]["price_change_percentage_24h"])
+    )
     }
 
     response = requests.get(url, params=params, timeout=30)
